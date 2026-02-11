@@ -37,6 +37,9 @@ parking_lot = "0.12"
 # File watching
 notify = "7"
 
+# App data directory
+dirs-next = "2"
+
 # Utils
 log = "0.4"
 env_logger = "0.11"

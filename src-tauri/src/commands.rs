@@ -1,11 +1,18 @@
-use crate::audio::engine::{AudioCommand, AudioDeviceInfo, AudioEngine, PlaybackState};
-use crate::audio::equalizer;
+use crate::audio::device_profiles::{DeviceProfile, DeviceProfileStore};
+use crate::audio::engine::{
+    AudioCommand, AudioDeviceInfo, AudioDiagnostics, AudioEngine, PlaybackState, ReplayGainMode,
+};
+use crate::audio::null_test;
 use crate::metadata::reader;
+use parking_lot::Mutex;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
 pub struct AppState {
     pub engine: Arc<AudioEngine>,
+    pub device_profiles: Arc<Mutex<DeviceProfileStore>>,
+    pub app_data_dir: PathBuf,
 }
 
 // ─── Playback Commands ───
@@ -56,23 +63,34 @@ pub fn get_position(state: State<'_, AppState>) -> u64 {
     state.engine.get_position_ms()
 }
 
-// ─── EQ Commands ───
+// ─── ReplayGain Commands ───
 
 #[tauri::command]
-pub fn set_eq_bands(bands: [f32; 10], state: State<'_, AppState>) -> Result<(), String> {
-    state.engine.send_command(AudioCommand::SetEqBands(bands));
+pub fn set_replaygain_mode(mode: ReplayGainMode, state: State<'_, AppState>) -> Result<(), String> {
+    state.engine.send_command(AudioCommand::SetReplayGain(mode));
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_eq_enabled(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
-    state.engine.send_command(AudioCommand::SetEqEnabled(enabled));
+pub fn set_clipping_prevention(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .send_command(AudioCommand::SetClippingPrevention(enabled));
     Ok(())
 }
 
+// ─── Audio Diagnostics (Latency Analyzer) ───
+
 #[tauri::command]
-pub fn get_eq_preset(name: String) -> Result<[f32; 10], String> {
-    equalizer::get_preset(&name).ok_or_else(|| format!("Unknown preset: {}", name))
+pub fn get_audio_diagnostics(state: State<'_, AppState>) -> AudioDiagnostics {
+    state.engine.get_diagnostics()
+}
+
+// ─── Bit-Perfect Null Test ───
+
+#[tauri::command]
+pub fn run_null_test(path: String) -> Result<null_test::NullTestResult, String> {
+    null_test::run_null_test(&path)
 }
 
 // ─── Device Commands ───
@@ -80,6 +98,41 @@ pub fn get_eq_preset(name: String) -> Result<[f32; 10], String> {
 #[tauri::command]
 pub fn get_audio_devices() -> Vec<AudioDeviceInfo> {
     crate::audio::engine::get_output_devices()
+}
+
+// ─── Per-Device Audio Profiles ───
+
+#[tauri::command]
+pub fn get_device_profile(
+    device_name: String,
+    state: State<'_, AppState>,
+) -> DeviceProfile {
+    state.device_profiles.lock().get(&device_name)
+}
+
+#[tauri::command]
+pub fn save_device_profile(
+    profile: DeviceProfile,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut store = state.device_profiles.lock();
+    store.set(profile);
+    store.save(&state.app_data_dir)
+}
+
+#[tauri::command]
+pub fn list_device_profiles(state: State<'_, AppState>) -> Vec<DeviceProfile> {
+    state.device_profiles.lock().list()
+}
+
+#[tauri::command]
+pub fn delete_device_profile(
+    device_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut store = state.device_profiles.lock();
+    store.delete(&device_name);
+    store.save(&state.app_data_dir)
 }
 
 // ─── Metadata Commands ───
@@ -100,14 +153,22 @@ pub fn get_album_art_base64(path: String) -> Result<Option<String>, String> {
 pub async fn open_files_dialog(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let files = app.dialog().file()
-        .add_filter("Audio Files", &["flac", "mp3", "wav", "ogg", "m4a", "aac", "wma"])
+    let files = app
+        .dialog()
+        .file()
+        .add_filter(
+            "Audio Files",
+            &["flac", "mp3", "wav", "ogg", "m4a", "aac", "wma"],
+        )
         .add_filter("FLAC", &["flac"])
         .add_filter("All Files", &["*"])
         .blocking_pick_files();
 
     match files {
-        Some(paths) => Ok(paths.iter().map(|p| p.path.to_string_lossy().to_string()).collect()),
+        Some(paths) => Ok(paths
+            .iter()
+            .map(|p| p.path.to_string_lossy().to_string())
+            .collect()),
         None => Ok(vec![]),
     }
 }

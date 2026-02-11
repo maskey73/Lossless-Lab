@@ -15,6 +15,7 @@ pub struct AudioDecoder {
     track_id: u32,
     pub spec: SignalSpec,
     pub duration_secs: f64,
+    bit_depth: Option<u8>,
 }
 
 impl AudioDecoder {
@@ -67,12 +68,15 @@ impl AudioDecoder {
             0.0
         };
 
+        let bit_depth = track.codec_params.bits_per_sample.map(|b| b as u8);
+
         Ok(Self {
             format,
             decoder,
             track_id,
             spec,
             duration_secs,
+            bit_depth,
         })
     }
 
@@ -82,6 +86,10 @@ impl AudioDecoder {
 
     pub fn channels(&self) -> usize {
         self.spec.channels.count()
+    }
+
+    pub fn bit_depth(&self) -> Option<u8> {
+        self.bit_depth
     }
 
     /// Decode the next packet, returning interleaved f32 samples.
